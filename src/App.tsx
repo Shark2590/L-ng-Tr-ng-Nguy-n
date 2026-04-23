@@ -25,7 +25,7 @@ import {
   increment
 } from 'firebase/firestore';
 import { auth, db } from './lib/firebase';
-import { LogOut, Play, Users, Trophy, Target, Timer, User as UserIcon, UserCircle, Bot, ArrowLeft, Coins, Gem, ScrollText, Flag, Landmark, Swords, X, Tv, Gift, Volume2, VolumeX, UserPlus, BookOpen, Store, Clock, Home, MessageCircle, Castle, Sparkles, Crown, History, Pause } from 'lucide-react';
+import { LogOut, Play, Users, Trophy, Target, Timer, User as UserIcon, UserCircle, Bot, ArrowLeft, Coins, Gem, ScrollText, Flag, Landmark, Swords, X, Tv, Gift, Volume2, VolumeX, UserPlus, BookOpen, Store, Clock, Home, MessageCircle, Castle, Sparkles, Crown, History, Pause, Share2 } from 'lucide-react';
 
 interface GridItem {
   value: number;
@@ -77,6 +77,8 @@ interface UserProfile {
   lastActive?: number;
   fastest50?: number;
   fastest100?: number;
+  botLevel?: number;
+  activeGameId?: string | null;
 }
 
 interface FriendRequest {
@@ -396,7 +398,7 @@ export default function App() {
   } | null>(null);
   const [mainTab, setMainTab] = useState<'welcome' | 'learning' | 'merchant'>('welcome');
   const [menuState, setMenuState] = useState<'home' | 'main' | 'lobby_1v1' | 'in_game' | 'account' | 'leaderboard' | 'friends'>('main');
-  const [leaderboardTab, setLeaderboardTab] = useState<'balance' | 'fastest50' | 'fastest100'>('balance');
+  const [leaderboardTab, setLeaderboardTab] = useState<'balance' | 'fastest50' | 'fastest100' | 'botLevel'>('balance');
   const [leaderboard, setLeaderboard] = useState<UserProfile[]>([]);
   const [gameId, setGameId] = useState<string>(() => localStorage.getItem('hoithilang_active_game_id') || '');
   const [gameInput, setGameInput] = useState<string>('');
@@ -565,6 +567,8 @@ export default function App() {
             q = query(collection(db, 'users'), where('fastest50', '>', 0));
           } else if (leaderboardTab === 'fastest100') {
             q = query(collection(db, 'users'), where('fastest100', '>', 0));
+          } else if (leaderboardTab === 'botLevel') {
+            q = query(collection(db, 'users'), where('botLevel', '>', 0));
           }
           
           if (!q) return;
@@ -577,6 +581,8 @@ export default function App() {
             users = users.sort((a,b) => (a.fastest50 || Infinity) - (b.fastest50 || Infinity));
           } else if (leaderboardTab === 'fastest100') {
             users = users.sort((a,b) => (a.fastest100 || Infinity) - (b.fastest100 || Infinity));
+          } else if (leaderboardTab === 'botLevel') {
+            users = users.sort((a,b) => (b.botLevel || 1) - (a.botLevel || 1));
           }
           
           setLeaderboard(users.slice(0, 10));
@@ -649,6 +655,21 @@ export default function App() {
       }
     }
   }, [userProfile, user]);
+
+  // Recover active game from user profile after login
+  useEffect(() => {
+    if (userProfile?.activeGameId && !gameId) {
+      setGameId(userProfile.activeGameId);
+    }
+  }, [userProfile?.activeGameId, gameId]);
+
+  // Sync gameId changes up to user profile 
+  useEffect(() => {
+    if (!user) return;
+    if (gameId && userProfile && userProfile.activeGameId !== gameId) {
+       updateDoc(doc(db, 'users', user.uid), { activeGameId: gameId }).catch(console.error);
+    }
+  }, [gameId, user, userProfile?.activeGameId]);
 
   // Presence Heartbeat
   useEffect(() => {
@@ -884,6 +905,14 @@ export default function App() {
           if (gameInput && gameId === gameInput.trim().toUpperCase()) {
              setGameId('');
              alert("Không tìm thấy hội thi này!");
+          } else {
+             // Stale gameId in activeGameId or localStorage
+             if (user) {
+               updateDoc(doc(db, 'users', user.uid), { activeGameId: null }).catch(console.error);
+             }
+             setGameId('');
+             setGameState(null);
+             setMenuState('main');
           }
         }
       },
@@ -913,6 +942,13 @@ export default function App() {
       if (mode === '1v1' && winnerId && winnerId !== 'bot_uid') {
         await updateDoc(doc(db, 'users', winnerId), {
           balance: increment(winnerReward)
+        });
+      }
+
+      if (mode === 'bot' && winnerId && winnerId !== 'bot_uid') {
+        const currentBotLevel = userProfile?.botLevel || 1;
+        await updateDoc(doc(db, 'users', winnerId), {
+          botLevel: currentBotLevel + 1
         });
       }
     } catch (e) {
@@ -950,7 +986,12 @@ export default function App() {
   // Handle Bot Actions
   useEffect(() => {
     if (gameState?.mode === 'bot' && gameState?.status === 'playing' && user?.uid === gameState.player1) {
-      const waitTime = Math.random() * 10000 + 10000; // 10s to 20s
+      if (gameState.is_paused) return; // Không cho bot đánh nếu đang tạm dừng
+      
+      const botLevel = userProfile?.botLevel || 1;
+      const expectedTimeSeconds = Math.max(2, 20 - (botLevel - 1) * 2);
+      // Randomize from (expectedTime - 1) to (expectedTime + 1), minimum 1s
+      const waitTime = Math.max(1000, expectedTimeSeconds * 1000 + (Math.random() * 2000 - 1000));
       
       const timeout = setTimeout(async () => {
         if (!gameState || gameState.status !== 'playing') return;
@@ -978,7 +1019,7 @@ export default function App() {
 
       return () => clearTimeout(timeout);
     }
-  }, [gameState?.current_number2, gameState?.status, gameState?.mode, user?.uid, gameState?.id]);
+  }, [gameState?.current_number2, gameState?.status, gameState?.mode, user?.uid, gameState?.id, userProfile?.botLevel, gameState?.is_paused]);
 
   // Manage timer and shuffling natively
   useEffect(() => {
@@ -1092,13 +1133,14 @@ export default function App() {
     
     const grid1 = generateInitialGrid(targetNum);
     const grid2 = generateInitialGrid(targetNum);
+    const botLevel = userProfile?.botLevel || 1;
     const newGame: Omit<GameState, 'id'> = {
       mode: 'bot',
       status: 'playing',
       player1: user.uid,
       player1_name: userProfile?.username || user.displayName || 'Kẻ Thách Thức',
       player2: 'bot_uid',
-      player2_name: 'Trưởng Làng',
+      player2_name: `Trưởng Làng (Cấp ${botLevel})`,
       current_number1: 1,
       current_number2: 1,
       found_numbers1: [],
@@ -1593,10 +1635,59 @@ export default function App() {
     }
   };
 
+  const handleShare = async () => {
+    if (!gameState) return;
+    
+    let shareText = '';
+    const matchTime = stopwatch.toFixed(1);
+    const maxNum = gameState.max_number;
+
+    if (gameState.mode === 'single') {
+       shareText = `Tôi đã hoàn thành thử thách Làng Trạng Nguyên (${maxNum} số) với kỳ tích ${matchTime} giây! Học giả nào dám phân tài cao thấp? 📜✨`;
+    } else if (gameState.mode === 'bot') {
+       const botLvl = userProfile?.botLevel || 1;
+       if (gameState.winner === user?.uid) {
+         shareText = `Ta đã đánh bại Trưởng Làng Cấp ${botLvl} ở thử thách ${maxNum} số! Danh vị Trạng Nguyên sẽ còn lưu tiếng thơm! 🏆👑`;
+       } else {
+         shareText = `Trưởng Làng Cấp ${botLvl} quả nhiên là đối thủ đáng gờm ở phần thi ${maxNum} số. Liệu có kỳ tài nào thay ta phục hận? 🥋🔥`;
+       }
+    } else if (gameState.mode === '1v1') {
+       if (gameState.winner === user?.uid) {
+         shareText = `Ta đã chiến thắng thuyết phục trên Lôi Đài Tỷ Võ (${maxNum} số)! Có ai muốn thử sức tại Làng Trạng Nguyên không? ⚔️🏅`;
+       } else {
+         shareText = `Tuy bại trận ở Lôi Đài tỷ võ (${maxNum} số), nhưng chí lớn vẫn chưa phai! Phục hận tại Làng Trạng Nguyên ngay! 🛡️⚡`;
+       }
+    }
+
+    const shareUrl = window.location.origin;
+
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: 'Hội Thi Làng Trạng Nguyên',
+          text: shareText,
+          url: shareUrl,
+        });
+      } catch (err) {
+        console.error("Lỗi khi chia sẻ:", err);
+      }
+    } else {
+      try {
+        await navigator.clipboard.writeText(`${shareText}\nChơi ngay tại: ${shareUrl}`);
+        alert("Đã chép thông điệp vào khay nhớ tạm để chia sẻ!");
+      } catch (err) {
+        alert("Không thể chia sẻ tự động, lão gia hãy tự khoe chiến tích nhé!");
+      }
+    }
+  };
+
   const leaveGame = () => {
     setGameState(null);
     setGameId('');
     setMenuState('main');
+    if (user) {
+      updateDoc(doc(db, 'users', user.uid), { activeGameId: null }).catch(console.error);
+    }
   };
 
   const confirmSurrender = async () => {
@@ -1653,7 +1744,7 @@ export default function App() {
             <ScrollText className="w-10 h-10 text-[#fef3c7]" />
           </div>
           <div className="text-center">
-             <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-[#fef3c7] mb-2 uppercase font-display" style={{ textShadow: '2px 2px 4px rgba(0,0,0,0.6)' }}>Hội Thi Làng</h1>
+             <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-[#fef3c7] mb-2 uppercase font-display" style={{ textShadow: '2px 2px 4px rgba(0,0,0,0.6)' }}>Làng Trạng Nguyên</h1>
              <p className="text-[#d6b485] text-sm">Ghi danh bảng vàng, nhận ngàn bổng lộc</p>
           </div>
 
@@ -1795,7 +1886,7 @@ export default function App() {
           }}
         >
           <h1 className="m-0 text-xs sm:text-sm font-bold flex items-center gap-1 sm:gap-1.5 text-[#f59e0b] uppercase font-display">
-            <ScrollText className="w-3 h-3 sm:w-4 sm:h-4" /> Hội Thi Làng
+            <ScrollText className="w-3 h-3 sm:w-4 sm:h-4" /> Làng Trạng Nguyên
           </h1>
           <p className="m-0 text-[8px] sm:text-[9px] text-[#d6b485] truncate max-w-[80px] sm:max-w-[120px]">Truy Tìm Mộc Bản</p>
         </div>
@@ -2002,16 +2093,17 @@ export default function App() {
                 Bảng Vàng Danh Dự
               </h2>
               
-              <div className="flex w-full mb-4 md:mb-6 border-b border-[#784627]">
+              <div className="flex w-full mb-4 md:mb-6 border-b border-[#784627] overflow-x-auto no-scrollbar">
                 {[
                   { id: 'balance', label: 'Ngân Lượng' },
                   { id: 'fastest50', label: 'Tốc Độ 50 Số' },
-                  { id: 'fastest100', label: 'Tốc Độ 100 Số' }
+                  { id: 'fastest100', label: 'Tốc Độ 100 Số' },
+                  { id: 'botLevel', label: 'Cấp Trưởng Làng' }
                 ].map((tab) => (
                   <button
                     key={tab.id}
-                    onClick={() => setLeaderboardTab(tab.id as 'balance' | 'fastest50' | 'fastest100')}
-                    className={`flex-1 py-3 px-2 text-xs md:text-sm font-bold uppercase transition-all whitespace-nowrap ${leaderboardTab === tab.id ? 'text-[#f59e0b] border-b-2 border-[#f59e0b] bg-[#452b1b]/50' : 'text-[#d6b485] hover:text-[#fef3c7] hover:bg-[#452b1b]/20'}`}
+                    onClick={() => setLeaderboardTab(tab.id as 'balance' | 'fastest50' | 'fastest100' | 'botLevel')}
+                    className={`shrink-0 flex-1 py-3 px-2 text-[10px] md:text-sm font-bold uppercase transition-all whitespace-nowrap ${leaderboardTab === tab.id ? 'text-[#f59e0b] border-b-2 border-[#f59e0b] bg-[#452b1b]/50' : 'text-[#d6b485] hover:text-[#fef3c7] hover:bg-[#452b1b]/20'}`}
                   >
                     {tab.label}
                   </button>
@@ -2022,7 +2114,7 @@ export default function App() {
                 <div className="flex flex-col gap-4 pb-4">
                   <div className="bg-[#452b1b]/50 p-4 md:p-6 border border-[#784627] rounded shadow-sm">
                     <h3 className="text-[#fef3c7] font-bold mb-4 uppercase text-xs md:text-sm border-b border-[#784627]/50 pb-2">
-                       {leaderboardTab === 'balance' ? 'Hạng bậc trạng nguyên' : 'Kỷ lục gia tốc độ'}
+                       {leaderboardTab === 'balance' ? 'Hạng bậc trạng nguyên' : leaderboardTab === 'botLevel' ? 'Cao thủ đánh bại Trưởng Làng' : 'Kỷ lục gia tốc độ'}
                     </h3>
                     <div className="flex flex-col gap-3">
                       {leaderboard.length === 0 ? (
@@ -2038,6 +2130,11 @@ export default function App() {
                             <div className="font-mono text-[#f59e0b] font-bold text-sm md:text-xl flex flex-col items-end md:flex-row md:items-center gap-1 md:gap-2 shrink-0">
                               {leaderboardTab === 'balance' ? (
                                 <div className="flex items-center gap-1"><Coins className="w-3.5 h-3.5 md:w-4 md:h-4 text-yellow-500" /> {u.balance.toLocaleString('vi-VN')}</div>
+                              ) : leaderboardTab === 'botLevel' ? (
+                                <div className="flex items-center gap-1 text-[#f59e0b]">
+                                  <Swords className="w-3.5 h-3.5 md:w-4 md:h-4" />
+                                  <span className="tabular-nums">{(u.botLevel || 1)}</span>
+                                </div>
                               ) : (
                                 <div className="flex items-center gap-1 text-green-500">
                                    <Timer className="w-3.5 h-3.5 md:w-4 md:h-4" /> 
@@ -2508,6 +2605,11 @@ export default function App() {
                             <p className="font-black text-[#fef3c7] text-2xl sm:text-4xl uppercase bg-[#291c14] border-2 border-[#f59e0b] px-6 py-4 rounded-lg shadow-[0_0_20px_rgba(245,158,11,0.3)]">
                               {userProfile?.username || user?.displayName || 'Trạng Nguyên'}
                             </p>
+                            {gameState.mode === 'bot' && (
+                              <p className="text-[#10b981] font-bold text-sm animate-pulse">
+                                Chúc mừng ngài đánh bại <span className="uppercase">{gameState.player2_name}</span>!<br/>Trưởng Làng sẽ nâng cao năng lực ở Ván sau.
+                              </p>
+                            )}
                           </div>
                         ) : gameState.winner === null && gameState.mode === 'single' ? (
                           <div className="space-y-4">
@@ -2523,17 +2625,25 @@ export default function App() {
                             </p>
                             <div className="h-0.5 w-20 bg-[#784627]"></div>
                             <p className="text-[#d6b485] text-sm uppercase font-bold">
-                              Tiền bối chiến thắng: <span className="text-[#fef3c7]">{gameState.winner === gameState.player1 ? gameState.player1_name : (gameState.mode === 'bot' ? 'Trưởng Làng' : gameState.player2_name)}</span>
+                              Tiền bối chiến thắng: <span className="text-[#fef3c7]">{gameState.winner === gameState.player1 ? gameState.player1_name : gameState.player2_name}</span>
                             </p>
                           </div>
                         )}
                      </div>
 
-                     <button 
-                      onClick={leaveGame}
-                      className="mt-6 sm:mt-10 bg-[#b45309] hover:bg-[#d97706] text-[#fef3c7] font-black py-4 px-10 text-xl sm:text-2xl shadow-[0_6px_0_#78350f] border-2 border-[#f59e0b] rounded-lg uppercase transition-all hover:-translate-y-1 active:translate-y-1 active:shadow-none animate-pulse">
-                      Xác Nhận & Quay Về
-                     </button>
+                     <div className="flex flex-col sm:flex-row gap-4 mt-6 sm:mt-10 w-full justify-center px-4">
+                       <button 
+                        onClick={handleShare}
+                        className="flex-1 max-w-[250px] bg-[#22c55e] hover:bg-[#16a34a] text-[#fef3c7] font-black py-4 px-4 text-lg sm:text-xl shadow-[0_6px_0_#14532d] border-2 border-[#4ade80] rounded-lg uppercase transition-all hover:-translate-y-1 active:translate-y-1 active:shadow-none animate-pulse flex items-center justify-center gap-2">
+                         <Share2 className="w-5 h-5 sm:w-6 sm:h-6" /> Khoe Thành Tích
+                       </button>
+
+                       <button 
+                        onClick={leaveGame}
+                        className="flex-1 max-w-[250px] bg-[#b45309] hover:bg-[#d97706] text-[#fef3c7] font-black py-4 px-4 text-lg sm:text-xl shadow-[0_6px_0_#78350f] border-2 border-[#f59e0b] rounded-lg uppercase transition-all hover:-translate-y-1 active:translate-y-1 active:shadow-none flex items-center justify-center gap-2">
+                        Quay Về Đình Làng
+                       </button>
+                     </div>
                   </div>
                 )}
 
