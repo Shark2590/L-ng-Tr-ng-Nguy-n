@@ -2631,16 +2631,16 @@ export default function App() {
                         )}
                      </div>
 
-                     <div className="flex flex-col sm:flex-row gap-4 mt-6 sm:mt-10 w-full justify-center px-4">
+                     <div className="flex flex-col items-center gap-4 mt-6 sm:mt-10 w-full px-4">
                        <button 
                         onClick={handleShare}
-                        className="flex-1 max-w-[250px] bg-[#22c55e] hover:bg-[#16a34a] text-[#fef3c7] font-black py-4 px-4 text-lg sm:text-xl shadow-[0_6px_0_#14532d] border-2 border-[#4ade80] rounded-lg uppercase transition-all hover:-translate-y-1 active:translate-y-1 active:shadow-none animate-pulse flex items-center justify-center gap-2">
-                         <Share2 className="w-5 h-5 sm:w-6 sm:h-6" /> Khoe Thành Tích
+                        className="w-full max-w-[200px] bg-[#22c55e] hover:bg-[#16a34a] text-[#fef3c7] font-black py-2 px-3 text-sm sm:text-base shadow-[0_4px_0_#14532d] border-2 border-[#4ade80] rounded-lg uppercase transition-all hover:-translate-y-1 active:translate-y-1 active:shadow-none animate-pulse flex items-center justify-center gap-1.5">
+                         <Share2 className="w-4 h-4 sm:w-5 sm:h-5" /> Khoe Thành Tích
                        </button>
 
                        <button 
                         onClick={leaveGame}
-                        className="flex-1 max-w-[250px] bg-[#b45309] hover:bg-[#d97706] text-[#fef3c7] font-black py-4 px-4 text-lg sm:text-xl shadow-[0_6px_0_#78350f] border-2 border-[#f59e0b] rounded-lg uppercase transition-all hover:-translate-y-1 active:translate-y-1 active:shadow-none flex items-center justify-center gap-2">
+                        className="w-full max-w-[200px] bg-[#b45309] hover:bg-[#d97706] text-[#fef3c7] font-black py-2 px-3 text-sm sm:text-base shadow-[0_4px_0_#78350f] border-2 border-[#f59e0b] rounded-lg uppercase transition-all hover:-translate-y-1 active:translate-y-1 active:shadow-none flex items-center justify-center gap-1.5">
                         Quay Về Đình Làng
                        </button>
                      </div>
@@ -2699,7 +2699,7 @@ export default function App() {
                         {(user?.uid === gameState.player1 || gameState.mode === 'single') && (
                           <button 
                              onClick={togglePause}
-                             className="flex-[1.5] flex flex-col items-center justify-center p-2 bg-[#291c14] border-2 border-slate-500 rounded-lg shadow-lg group active:scale-95 transition-all text-slate-300 hover:bg-[#452b1b]">
+                             className="flex-1 flex flex-col items-center justify-center p-2 bg-[#291c14] border-2 border-slate-500 rounded-lg shadow-lg group active:scale-95 transition-all text-slate-300 hover:bg-[#452b1b]">
                              <div className="flex items-center gap-2">
                                {gameState.is_paused ? <Play className="w-5 h-5" /> : <Pause className="w-5 h-5" />}
                              </div>
@@ -2710,7 +2710,7 @@ export default function App() {
                         {/* Hint Button */}
                         <button 
                            onClick={useHint}
-                           className="flex-1 flex flex-col items-center justify-center p-2 bg-[#291c14] border-2 border-[#f59e0b] rounded-lg shadow-lg group active:scale-95 transition-all text-[#f59e0b] hover:bg-[#452b1b]">
+                           className="flex flex-col items-center justify-center p-2 bg-[#291c14] border-2 border-[#f59e0b] rounded-lg shadow-lg group active:scale-95 transition-all text-[#f59e0b] hover:bg-[#452b1b] flex-1">
                            <div className="flex items-center gap-2">
                              <Gem className="w-5 h-5 animate-pulse" />
                              <span className="font-black text-xl">
@@ -2721,20 +2721,20 @@ export default function App() {
                         </button>
 
                         {/* Mobile: Quick Chat Toggle */}
-                        <div className="flex-1 md:hidden relative">
+                        <div className="flex-1 relative">
                            <button 
                               onClick={() => setShowQuickChat(!showQuickChat)}
-                              className="w-full flex flex-col items-center justify-center p-2 bg-[#291c14] border-2 border-[#3b82f6] rounded-lg shadow-lg active:scale-95 transition-all text-[#3b82f6] hover:bg-[#452b1b]">
+                              className="w-full h-full flex flex-col items-center justify-center p-2 bg-[#291c14] border-2 border-[#3b82f6] rounded-lg shadow-lg active:scale-95 transition-all text-[#3b82f6] hover:bg-[#452b1b]">
                               <MessageCircle className="w-5 h-5" />
                               <span className="text-[8px] font-black uppercase tracking-tighter mt-1">Tán Gẫu</span>
                            </button>
                            {showQuickChat && (
-                            <div className="absolute bottom-full mb-2 left-0 right-0 z-50 bg-[#291c14] border-2 border-[#3b82f6] p-2 rounded-lg grid grid-cols-3 gap-1 shadow-2xl">
-                               {['🤣', '😭', '😡', 'Lẹ lên!', 'Win!', 'Đợi tí!'].map(msg => (
+                            <div className="absolute bottom-full mb-2 left-0 right-0 z-50 bg-[#291c14] border-2 border-[#3b82f6] p-2 rounded-lg grid grid-cols-2 gap-1 shadow-2xl">
+                               {['Đỉnh cao!', 'Gắt quá!', 'Nhường ván nhé!', 'Nhanh nào!', 'Ta thắng!', 'Chưa thua đâu!'].map(msg => (
                                  <button
                                    key={msg}
                                    onClick={() => { sendQuickChat(msg); setShowQuickChat(false); }}
-                                   className="bg-[#452b1b] py-2 text-xs rounded active:bg-blue-600 transition-colors">
+                                   className="bg-[#452b1b] py-2 text-[10px] rounded active:bg-blue-600 transition-colors text-white font-bold p-1">
                                    {msg}
                                  </button>
                                ))}
