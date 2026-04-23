@@ -1,0 +1,89 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Default Deny
+    match /{document=**} { allow read, write: if false; }
+
+    // Primitives
+    function isSignedIn() { return request.auth != null; }
+    function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+
+    // --- USERS ---
+    function isValidUser(data) {
+      return data.uid is string && data.uid.size() <= 128 &&
+             data.username is string && data.username.size() <= 50 &&
+             data.balance is number &&
+             data.matchesRemaining is number &&
+             data.lastResetDate is string &&
+             (!('friends' in data) || data.friends is list) &&
+             (!('lastActive' in data) || data.lastActive is number) &&
+             (!('fastest50' in data) || data.fastest50 is number) &&
+             (!('fastest100' in data) || data.fastest100 is number);
+    }
+
+    match /users/{userId} {
+      allow get, list: if isSignedIn();
+      allow create: if isOwner(userId);
+      allow update: if isSignedIn() && (
+        isOwner(userId) || 
+        incoming().diff(existing()).affectedKeys().hasOnly(['balance']) ||
+        incoming().diff(existing()).affectedKeys().hasOnly(['friends'])
+      );
+    }
+
+    // --- GAMES ---
+    function isValidGame(data) {
+      return data.status in ['waiting', 'playing', 'finished'] &&
+             data.mode in ['single', '1v1', 'bot'] &&
+             data.player1 is string &&
+             (data.player2 == null || data.player2 is string) &&
+             data.betAmount is number &&
+             data.betAmount >= 0;
+    }
+
+    function isPlayerInGame(gameData) {
+      return gameData.player1 == request.auth.uid || gameData.player2 == request.auth.uid;
+    }
+
+    match /games/{gameId} {
+      allow create: if isSignedIn() && incoming().player1 == request.auth.uid;
+      allow get, list: if isSignedIn();
+      allow update: if isSignedIn() && (
+        // Allow joining a game
+        (existing().status == 'waiting' && existing().player2 == null && incoming().player2 == request.auth.uid) ||
+        // Allow players in the game to update it
+        (existing().player1 == request.auth.uid || existing().player2 == request.auth.uid)
+      );
+      allow delete: if isSignedIn() && existing().player1 == request.auth.uid;
+    }
+
+    // --- FRIEND REQUESTS ---
+    function isValidFriendRequest(data) {
+      return data.fromId is string && data.toId is string && 
+             data.status in ['pending', 'accepted', 'declined'];
+    }
+
+    match /friend_requests/{reqId} {
+      allow create: if isSignedIn() && incoming().fromId == request.auth.uid && isValidFriendRequest(incoming());
+      allow get, list: if isSignedIn() && (resource.data.fromId == request.auth.uid || resource.data.toId == request.auth.uid);
+      allow update: if isSignedIn() && (resource.data.fromId == request.auth.uid || resource.data.toId == request.auth.uid) && isValidFriendRequest(incoming());
+      allow delete: if isSignedIn() && (resource.data.fromId == request.auth.uid || resource.data.toId == request.auth.uid);
+    }
+
+    // --- INVITATIONS ---
+    function isValidInvitation(data) {
+      return data.fromId is string && data.toId is string && 
+             data.status in ['pending', 'accepted', 'declined'];
+    }
+
+    match /invitations/{invId} {
+      allow create: if isSignedIn() && incoming().fromId == request.auth.uid && isValidInvitation(incoming());
+      allow get, list: if isSignedIn() && (resource.data.fromId == request.auth.uid || resource.data.toId == request.auth.uid);
+      allow update: if isSignedIn() && (resource.data.fromId == request.auth.uid || resource.data.toId == request.auth.uid) && isValidInvitation(incoming());
+      allow delete: if isSignedIn() && (resource.data.fromId == request.auth.uid || resource.data.toId == request.auth.uid);
+    }
+  }
+}

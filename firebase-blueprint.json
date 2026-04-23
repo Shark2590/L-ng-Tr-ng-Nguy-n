@@ -1,0 +1,90 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "User profile with game statistics and social connections",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "username": { "type": "string" },
+        "phone": { "type": "string" },
+        "referralCode": { "type": "string" },
+        "balance": { "type": "number" },
+        "matchesRemaining": { "type": "number" },
+        "lastResetDate": { "type": "string" },
+        "friends": { "type": "array", "items": { "type": "string" } },
+        "lastActive": { "type": "number" },
+        "referredBy": { "type": "string" },
+        "fastest50": { "type": "number" },
+        "fastest100": { "type": "number" }
+      },
+      "required": ["uid", "username", "balance", "matchesRemaining"]
+    },
+    "Game": {
+      "title": "Game Session",
+      "description": "Information about a competitive or single player game",
+      "type": "object",
+      "properties": {
+        "mode": { "enum": ["single", "1v1", "bot"] },
+        "status": { "enum": ["waiting", "playing", "finished"] },
+        "player1": { "type": "string" },
+        "player1_name": { "type": "string" },
+        "player2": { "type": "string" },
+        "player2_name": { "type": "string" },
+        "current_number1": { "type": "number" },
+        "current_number2": { "type": "number" },
+        "found_numbers1": { "type": "array" },
+        "found_numbers2": { "type": "array" },
+        "grid1": { "type": "array" },
+        "grid2": { "type": "array" },
+        "betAmount": { "type": "number" },
+        "winner": { "type": "string" },
+        "recentChats": { "type": "array" },
+        "is_paused": { "type": "boolean" },
+        "paused_at": { "type": "number" }
+      }
+    },
+    "FriendRequest": {
+      "title": "Friend Request",
+      "description": "Request to connect with another user",
+      "type": "object",
+      "properties": {
+        "fromId": { "type": "string" },
+        "fromName": { "type": "string" },
+        "toId": { "type": "string" },
+        "toName": { "type": "string" },
+        "status": { "enum": ["pending", "accepted", "declined"] }
+      }
+    },
+    "Invitation": {
+      "title": "Game Invitation",
+      "description": "Invite to join a specific game room",
+      "type": "object",
+      "properties": {
+        "fromId": { "type": "string" },
+        "fromName": { "type": "string" },
+        "toId": { "type": "string" },
+        "roomId": { "type": "string" },
+        "status": { "enum": ["pending", "accepted", "declined"] }
+      }
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Global user profiles"
+    },
+    "/games/{gameId}": {
+      "schema": "Game",
+      "description": "Match sessions"
+    },
+    "/friend_requests/{reqId}": {
+      "schema": "FriendRequest",
+      "description": "Pending and past friend requests"
+    },
+    "/invitations/{invId}": {
+      "schema": "Invitation",
+      "description": "Game invites between friends"
+    }
+  }
+}

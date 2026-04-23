@@ -1,0 +1,6 @@
+{
+  "name": "Làng trạng nguyên",
+  "description": "Multiplayer real-time game to find numbers 1-100 before the grid shuffles, powered by Firebase.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

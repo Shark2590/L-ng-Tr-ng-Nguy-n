@@ -1,0 +1,94 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default Deny
+    match /{document=**} { allow read, write: if false; }
+
+    // Helpers
+    function isSignedIn() { return request.auth != null; }
+    function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    
+    // User Validation
+    function isValidUser(data) {
+      return data.uid is string && data.uid.size() <= 128 &&
+             data.username is string && data.username.size() <= 50 &&
+             data.balance is number &&
+             data.matchesRemaining is number &&
+             data.lastResetDate is string &&
+             (!('friends' in data) || data.friends is list) &&
+             (!('lastActive' in data) || data.lastActive is number);
+    }
+
+    match /users/{userId} {
+      allow get: if isSignedIn();
+      allow list: if isSignedIn(); // We allow listing for leaderboard and search, but should be careful
+      
+      allow create: if isOwner(userId) && isValidUser(incoming()) &&
+                    incoming().uid == userId &&
+                    incoming().keys().hasAll(['uid', 'username', 'balance', 'matchesRemaining', 'lastResetDate']) &&
+                    incoming().keys().size() >= 5;
+                    
+      allow update: if isSignedIn() && (
+        // Self Update
+        (isOwner(userId) && isValidUser(incoming()) && 
+         incoming().uid == userId &&
+         incoming().diff(existing()).affectedKeys().hasOnly(['username', 'balance', 'matchesRemaining', 'lastResetDate', 'friends', 'lastActive'])) ||
+        // Referrer Update (only incrementing balance)
+        (incoming().diff(existing()).affectedKeys().hasOnly(['balance']))
+      );
+    }
+
+    // Game Validation
+    function isValidGame(data) {
+      return data.mode in ['single', '1v1', 'bot'] &&
+             data.status in ['waiting', 'playing', 'finished'] &&
+             data.player1 is string &&
+             (data.player2 == null || data.player2 is string) &&
+             data.current_number1 is number &&
+             data.current_number2 is number &&
+             data.max_number is number;
+    }
+
+    match /games/{gameId} {
+      allow get: if isSignedIn();
+      allow list: if isSignedIn();
+      
+      allow create: if isSignedIn() && isValidGame(incoming()) && incoming().player1 == request.auth.uid;
+      
+      allow update: if isSignedIn() && isValidGame(incoming()) && (
+        // Player 1 updates
+        (existing().player1 == request.auth.uid && 
+         incoming().diff(existing()).affectedKeys().hasOnly(['current_number1', 'found_numbers1', 'hints_used1', 'last_shuffle_time', 'grid1', 'grid2', 'status', 'winner', 'level'])) ||
+        // Player 2 Joins
+        (existing().status == 'waiting' && existing().player2 == null && incoming().player2 == request.auth.uid &&
+         incoming().diff(existing()).affectedKeys().hasOnly(['player2', 'player2_name', 'status', 'grid2', 'last_shuffle_time'])) ||
+        // Player 2 updates
+        (existing().player2 == request.auth.uid &&
+         incoming().diff(existing()).affectedKeys().hasOnly(['current_number2', 'found_numbers2', 'hints_used2', 'status', 'winner']))
+      );
+    }
+
+    // Invitation Validation
+    function isValidInvitation(data) {
+      return data.fromId is string &&
+             data.toId is string &&
+             data.roomId is string &&
+             data.status in ['pending', 'accepted', 'declined'];
+    }
+
+    match /invitations/{invId} {
+      allow list: if isSignedIn() && (resource.data.toId == request.auth.uid || resource.data.fromId == request.auth.uid);
+      allow get: if isSignedIn() && (resource.data.toId == request.auth.uid || resource.data.fromId == request.auth.uid);
+      
+      allow create: if isSignedIn() && isValidInvitation(incoming()) && incoming().fromId == request.auth.uid;
+      
+      allow update: if isSignedIn() && isValidInvitation(incoming()) && (
+        // Recipient accepts or declines
+        (existing().toId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['status']))
+      );
+    }
+  }
+}
