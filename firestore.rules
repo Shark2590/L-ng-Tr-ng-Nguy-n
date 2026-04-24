@@ -4,7 +4,7 @@ service cloud.firestore {
     // 0. Default Deny
     match /{document=**} { allow read, write: if false; }
 
-    // Primitives
+    // Helpers
     function isSignedIn() { return request.auth != null; }
     function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
     function incoming() { return request.resource.data; }
@@ -13,76 +13,51 @@ service cloud.firestore {
 
     // --- USERS ---
     function isValidUser(data) {
-      return data.uid is string && data.uid.size() <= 128 &&
-             data.username is string && data.username.size() <= 50 &&
-             data.balance is number &&
-             data.matchesRemaining is number &&
-             data.lastResetDate is string &&
-             (!('friends' in data) || data.friends is list) &&
-             (!('lastActive' in data) || data.lastActive is number) &&
-             (!('fastest50' in data) || data.fastest50 is number) &&
-             (!('fastest100' in data) || data.fastest100 is number);
+      // Basic type validation for User
+      return data.uid is string &&
+             data.username is string &&
+             data.balance is number;
     }
 
     match /users/{userId} {
-      allow get, list: if isSignedIn();
-      allow create: if isOwner(userId);
+      allow get: if isSignedIn() && (isOwner(userId) || request.auth.token.admin == true);
+      allow list: if isSignedIn(); // Allow listing users for e.g. leaderboard
+      allow create: if isOwner(userId) && isValidUser(incoming());
+      // Allow self-updates and friend list modifications by any signed-in user
       allow update: if isSignedIn() && (
-        isOwner(userId) || 
-        incoming().diff(existing()).affectedKeys().hasOnly(['balance']) ||
-        incoming().diff(existing()).affectedKeys().hasOnly(['friends'])
+        (isOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly(['balance', 'friends', 'lastActive', 'matchesRemaining', 'lastResetDate', 'botWins', 'currentLevel'])) ||
+        (incoming().diff(existing()).affectedKeys().hasOnly(['balance'])) ||
+        (incoming().diff(existing()).affectedKeys().hasOnly(['friends']))
       );
     }
-
+    
     // --- GAMES ---
-    function isValidGame(data) {
-      return data.status in ['waiting', 'playing', 'finished'] &&
-             data.mode in ['single', '1v1', 'bot'] &&
-             data.player1 is string &&
-             (data.player2 == null || data.player2 is string) &&
-             data.betAmount is number &&
-             data.betAmount >= 0;
-    }
-
-    function isPlayerInGame(gameData) {
-      return gameData.player1 == request.auth.uid || gameData.player2 == request.auth.uid;
-    }
-
     match /games/{gameId} {
       allow create: if isSignedIn() && incoming().player1 == request.auth.uid;
-      allow get, list: if isSignedIn();
+      allow get: if isSignedIn() && (resource.data.player1 == request.auth.uid || resource.data.player2 == request.auth.uid);
+      allow list: if isSignedIn(); // Assume client filters
       allow update: if isSignedIn() && (
-        // Allow joining a game
         (existing().status == 'waiting' && existing().player2 == null && incoming().player2 == request.auth.uid) ||
-        // Allow players in the game to update it
         (existing().player1 == request.auth.uid || existing().player2 == request.auth.uid)
       );
       allow delete: if isSignedIn() && existing().player1 == request.auth.uid;
     }
 
-    // --- FRIEND REQUESTS ---
-    function isValidFriendRequest(data) {
-      return data.fromId is string && data.toId is string && 
-             data.status in ['pending', 'accepted', 'declined'];
-    }
-
-    match /friend_requests/{reqId} {
-      allow create: if isSignedIn() && incoming().fromId == request.auth.uid && isValidFriendRequest(incoming());
-      allow get, list: if isSignedIn() && (resource.data.fromId == request.auth.uid || resource.data.toId == request.auth.uid);
-      allow update: if isSignedIn() && (resource.data.fromId == request.auth.uid || resource.data.toId == request.auth.uid) && isValidFriendRequest(incoming());
+    // --- INVITATIONS ---
+    match /invitations/{invId} {
+      allow create: if isSignedIn() && incoming().fromId == request.auth.uid;
+      allow list: if isSignedIn(); 
+      allow get: if isSignedIn() && (resource.data.fromId == request.auth.uid || resource.data.toId == request.auth.uid);
+      allow update: if isSignedIn() && (resource.data.fromId == request.auth.uid || resource.data.toId == request.auth.uid);
       allow delete: if isSignedIn() && (resource.data.fromId == request.auth.uid || resource.data.toId == request.auth.uid);
     }
-
-    // --- INVITATIONS ---
-    function isValidInvitation(data) {
-      return data.fromId is string && data.toId is string && 
-             data.status in ['pending', 'accepted', 'declined'];
-    }
-
-    match /invitations/{invId} {
-      allow create: if isSignedIn() && incoming().fromId == request.auth.uid && isValidInvitation(incoming());
-      allow get, list: if isSignedIn() && (resource.data.fromId == request.auth.uid || resource.data.toId == request.auth.uid);
-      allow update: if isSignedIn() && (resource.data.fromId == request.auth.uid || resource.data.toId == request.auth.uid) && isValidInvitation(incoming());
+    
+    // --- FRIEND REQUESTS ---
+    match /friend_requests/{reqId} {
+      allow create: if isSignedIn() && incoming().fromId == request.auth.uid;
+      allow list: if isSignedIn();
+      allow get: if isSignedIn() && (resource.data.fromId == request.auth.uid || resource.data.toId == request.auth.uid);
+      allow update: if isSignedIn() && (resource.data.fromId == request.auth.uid || resource.data.toId == request.auth.uid);
       allow delete: if isSignedIn() && (resource.data.fromId == request.auth.uid || resource.data.toId == request.auth.uid);
     }
   }

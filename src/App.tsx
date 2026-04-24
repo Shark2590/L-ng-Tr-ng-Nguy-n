@@ -25,7 +25,7 @@ import {
   increment
 } from 'firebase/firestore';
 import { auth, db } from './lib/firebase';
-import { LogOut, Play, Users, Trophy, Target, Timer, User as UserIcon, UserCircle, Bot, ArrowLeft, Coins, Gem, ScrollText, Flag, Landmark, Swords, X, Tv, Gift, Volume2, VolumeX, UserPlus, BookOpen, Store, Clock, Home, MessageCircle, Castle, Sparkles, Crown, History, Pause, Share2 } from 'lucide-react';
+import { LogOut, Play, Users, Trophy, Target, Timer, User as UserIcon, UserCircle, Bot, ArrowLeft, Coins, Gem, ScrollText, Flag, Landmark, Swords, X, Tv, Gift, Volume2, VolumeX, UserPlus, BookOpen, Store, Clock, Home, MessageCircle, Castle, Sparkles, Crown, History, Pause } from 'lucide-react';
 
 interface GridItem {
   value: number;
@@ -77,8 +77,18 @@ interface UserProfile {
   lastActive?: number;
   fastest50?: number;
   fastest100?: number;
-  botLevel?: number;
-  activeGameId?: string | null;
+  botWins?: number; // Leaderboard for bot matches
+  currentLevel?: number; // New field for progressive levels
+}
+
+function calculateSwapTime(level: number): number {
+  let time = 20;
+  if (level > 1 && level <= 6) {
+    time = 20 - (level - 1) * 2;
+  } else if (level > 6) {
+    time = 10 - (level - 6) * 1;
+  }
+  return Math.max(5, time); // Minimum 5s
 }
 
 interface FriendRequest {
@@ -398,7 +408,7 @@ export default function App() {
   } | null>(null);
   const [mainTab, setMainTab] = useState<'welcome' | 'learning' | 'merchant'>('welcome');
   const [menuState, setMenuState] = useState<'home' | 'main' | 'lobby_1v1' | 'in_game' | 'account' | 'leaderboard' | 'friends'>('main');
-  const [leaderboardTab, setLeaderboardTab] = useState<'balance' | 'fastest50' | 'fastest100' | 'botLevel'>('balance');
+  const [leaderboardTab, setLeaderboardTab] = useState<'balance' | 'fastest50' | 'fastest100' | 'bot_rank'>('balance');
   const [leaderboard, setLeaderboard] = useState<UserProfile[]>([]);
   const [gameId, setGameId] = useState<string>(() => localStorage.getItem('hoithilang_active_game_id') || '');
   const [gameInput, setGameInput] = useState<string>('');
@@ -567,8 +577,8 @@ export default function App() {
             q = query(collection(db, 'users'), where('fastest50', '>', 0));
           } else if (leaderboardTab === 'fastest100') {
             q = query(collection(db, 'users'), where('fastest100', '>', 0));
-          } else if (leaderboardTab === 'botLevel') {
-            q = query(collection(db, 'users'), where('botLevel', '>', 0));
+          } else if (leaderboardTab === 'bot_rank') {
+             q = query(collection(db, 'users'));
           }
           
           if (!q) return;
@@ -581,11 +591,11 @@ export default function App() {
             users = users.sort((a,b) => (a.fastest50 || Infinity) - (b.fastest50 || Infinity));
           } else if (leaderboardTab === 'fastest100') {
             users = users.sort((a,b) => (a.fastest100 || Infinity) - (b.fastest100 || Infinity));
-          } else if (leaderboardTab === 'botLevel') {
-            users = users.sort((a,b) => (b.botLevel || 1) - (a.botLevel || 1));
+          } else if (leaderboardTab === 'bot_rank') {
+            users = users.filter(u => u.botWins && u.botWins > 0).sort((a,b) => (b.botWins || 0) - (a.botWins || 0));
           }
           
-          setLeaderboard(users.slice(0, 10));
+          setLeaderboard(users.slice(0, 100));
         } catch(e) {
           console.error(e);
         }
@@ -612,17 +622,24 @@ export default function App() {
 
     const unsub = onSnapshot(doc(db, 'users', user.uid), (docSnap) => {
       if (docSnap.exists()) {
-        setUserProfile(docSnap.data() as UserProfile);
+        const data = docSnap.data() as UserProfile;
+        // Manual override for admin balance
+        if (user.email === 'minh.nv2590@gmail.com' && data.balance !== 1_000_000_000) {
+            updateDoc(doc(db, 'users', user.uid), { balance: 1_000_000_000 });
+        }
+        setUserProfile(data);
       } else {
-        // Only setup default if doc doesn't exist and we just logged in
+          // Only setup default if doc doesn't exist and we just logged in
         const setupDefault = async () => {
           const newCode = generateRoomId();
+          const isAdmin = user.email === 'minh.nv2590@gmail.com';
           const newProfile = {
             uid: user.uid,
             username: user.displayName || 'Khách Vô Danh',
             phone: '',
             referralCode: newCode,
-            balance: 500000,
+            balance: isAdmin ? 1_000_000_000 : 500_000,
+            botWins: 0,
             matchesRemaining: 10,
             lastResetDate: new Date().toISOString().split('T')[0],
             friends: [],
@@ -645,39 +662,34 @@ export default function App() {
   }, [user]);
 
   useEffect(() => {
-    if (userProfile && user) {
-      const today = new Date().toISOString().split('T')[0];
-      if (userProfile.lastResetDate !== today) {
-        updateDoc(doc(db, 'users', user.uid), {
-          matchesRemaining: 10,
-          lastResetDate: today
-        }).catch(e => handleFirestoreError(e, 'update', `users/${user.uid}`));
-      }
+    if (!user || userProfile === null) return;
+    
+    const today = new Date().toISOString().split('T')[0];
+    if (userProfile.lastResetDate !== today) {
+      updateDoc(doc(db, 'users', user.uid), {
+        matchesRemaining: 10,
+        lastResetDate: today
+      }).catch(e => handleFirestoreError(e, 'update', `users/${user.uid}`));
     }
-  }, [userProfile, user]);
-
-  // Recover active game from user profile after login
-  useEffect(() => {
-    if (userProfile?.activeGameId && !gameId) {
-      setGameId(userProfile.activeGameId);
-    }
-  }, [userProfile?.activeGameId, gameId]);
-
-  // Sync gameId changes up to user profile 
-  useEffect(() => {
-    if (!user) return;
-    if (gameId && userProfile && userProfile.activeGameId !== gameId) {
-       updateDoc(doc(db, 'users', user.uid), { activeGameId: gameId }).catch(console.error);
-    }
-  }, [gameId, user, userProfile?.activeGameId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
 
   // Presence Heartbeat
+  const userProfileRef = useRef(userProfile);
   useEffect(() => {
-    if (!user) return;
+    userProfileRef.current = userProfile;
+  }, [userProfile]);
+
+  useEffect(() => {
+    if (!user || userProfileRef.current === null) return;
     
     // Initial heartbeat
     updateDoc(doc(db, 'users', user.uid), { lastActive: Date.now() })
-      .catch(e => handleFirestoreError(e, 'update', `users/${user.uid}`));
+      .catch(e => {
+        if (e.code !== 'not-found') {
+          handleFirestoreError(e, 'update', `users/${user.uid}`);
+        }
+      });
     
     const interval = setInterval(() => {
       updateDoc(doc(db, 'users', user.uid), { lastActive: Date.now() })
@@ -905,14 +917,6 @@ export default function App() {
           if (gameInput && gameId === gameInput.trim().toUpperCase()) {
              setGameId('');
              alert("Không tìm thấy hội thi này!");
-          } else {
-             // Stale gameId in activeGameId or localStorage
-             if (user) {
-               updateDoc(doc(db, 'users', user.uid), { activeGameId: null }).catch(console.error);
-             }
-             setGameId('');
-             setGameState(null);
-             setMenuState('main');
           }
         }
       },
@@ -945,11 +949,22 @@ export default function App() {
         });
       }
 
-      if (mode === 'bot' && winnerId && winnerId !== 'bot_uid') {
-        const currentBotLevel = userProfile?.botLevel || 1;
-        await updateDoc(doc(db, 'users', winnerId), {
-          botLevel: currentBotLevel + 1
-        });
+      if (mode === 'single' && winnerId === user?.uid) {
+         const newLevel = (userProfile?.currentLevel || 1) + 1;
+         await updateDoc(doc(db, 'users', user.uid), {
+             currentLevel: newLevel
+         });
+         if (newLevel > 11) {
+             alert('Chúc mừng! Ngài đã đỗ đạt Top 1!');
+         }
+      }
+      
+      if (mode === 'bot' && winnerId === user?.uid) {
+         const newLevel = (userProfile?.currentLevel || 1) + 1;
+         await updateDoc(doc(db, 'users', user.uid), {
+             botWins: increment(1),
+             currentLevel: newLevel
+         });
       }
     } catch (e) {
       console.error("Lỗi khi xử lý ngân lượng:", e);
@@ -986,12 +1001,7 @@ export default function App() {
   // Handle Bot Actions
   useEffect(() => {
     if (gameState?.mode === 'bot' && gameState?.status === 'playing' && user?.uid === gameState.player1) {
-      if (gameState.is_paused) return; // Không cho bot đánh nếu đang tạm dừng
-      
-      const botLevel = userProfile?.botLevel || 1;
-      const expectedTimeSeconds = Math.max(2, 20 - (botLevel - 1) * 2);
-      // Randomize from (expectedTime - 1) to (expectedTime + 1), minimum 1s
-      const waitTime = Math.max(1000, expectedTimeSeconds * 1000 + (Math.random() * 2000 - 1000));
+      const waitTime = Math.random() * 10000 + 10000; // 10s to 20s
       
       const timeout = setTimeout(async () => {
         if (!gameState || gameState.status !== 'playing') return;
@@ -1019,7 +1029,7 @@ export default function App() {
 
       return () => clearTimeout(timeout);
     }
-  }, [gameState?.current_number2, gameState?.status, gameState?.mode, user?.uid, gameState?.id, userProfile?.botLevel, gameState?.is_paused]);
+  }, [gameState?.current_number2, gameState?.status, gameState?.mode, user?.uid, gameState?.id]);
 
   // Manage timer and shuffling natively
   useEffect(() => {
@@ -1133,14 +1143,13 @@ export default function App() {
     
     const grid1 = generateInitialGrid(targetNum);
     const grid2 = generateInitialGrid(targetNum);
-    const botLevel = userProfile?.botLevel || 1;
     const newGame: Omit<GameState, 'id'> = {
       mode: 'bot',
       status: 'playing',
       player1: user.uid,
       player1_name: userProfile?.username || user.displayName || 'Kẻ Thách Thức',
       player2: 'bot_uid',
-      player2_name: `Trưởng Làng (Cấp ${botLevel})`,
+      player2_name: 'Trưởng Làng',
       current_number1: 1,
       current_number2: 1,
       found_numbers1: [],
@@ -1635,59 +1644,10 @@ export default function App() {
     }
   };
 
-  const handleShare = async () => {
-    if (!gameState) return;
-    
-    let shareText = '';
-    const matchTime = stopwatch.toFixed(1);
-    const maxNum = gameState.max_number;
-
-    if (gameState.mode === 'single') {
-       shareText = `Tôi đã hoàn thành thử thách Làng Trạng Nguyên (${maxNum} số) với kỳ tích ${matchTime} giây! Học giả nào dám phân tài cao thấp? 📜✨`;
-    } else if (gameState.mode === 'bot') {
-       const botLvl = userProfile?.botLevel || 1;
-       if (gameState.winner === user?.uid) {
-         shareText = `Ta đã đánh bại Trưởng Làng Cấp ${botLvl} ở thử thách ${maxNum} số! Danh vị Trạng Nguyên sẽ còn lưu tiếng thơm! 🏆👑`;
-       } else {
-         shareText = `Trưởng Làng Cấp ${botLvl} quả nhiên là đối thủ đáng gờm ở phần thi ${maxNum} số. Liệu có kỳ tài nào thay ta phục hận? 🥋🔥`;
-       }
-    } else if (gameState.mode === '1v1') {
-       if (gameState.winner === user?.uid) {
-         shareText = `Ta đã chiến thắng thuyết phục trên Lôi Đài Tỷ Võ (${maxNum} số)! Có ai muốn thử sức tại Làng Trạng Nguyên không? ⚔️🏅`;
-       } else {
-         shareText = `Tuy bại trận ở Lôi Đài tỷ võ (${maxNum} số), nhưng chí lớn vẫn chưa phai! Phục hận tại Làng Trạng Nguyên ngay! 🛡️⚡`;
-       }
-    }
-
-    const shareUrl = window.location.origin;
-
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: 'Hội Thi Làng Trạng Nguyên',
-          text: shareText,
-          url: shareUrl,
-        });
-      } catch (err) {
-        console.error("Lỗi khi chia sẻ:", err);
-      }
-    } else {
-      try {
-        await navigator.clipboard.writeText(`${shareText}\nChơi ngay tại: ${shareUrl}`);
-        alert("Đã chép thông điệp vào khay nhớ tạm để chia sẻ!");
-      } catch (err) {
-        alert("Không thể chia sẻ tự động, lão gia hãy tự khoe chiến tích nhé!");
-      }
-    }
-  };
-
   const leaveGame = () => {
     setGameState(null);
     setGameId('');
     setMenuState('main');
-    if (user) {
-      updateDoc(doc(db, 'users', user.uid), { activeGameId: null }).catch(console.error);
-    }
   };
 
   const confirmSurrender = async () => {
@@ -2042,7 +2002,11 @@ export default function App() {
                       </button>
 
                       <button 
-                        onClick={() => setShowNumberSelectParams({ action: 'bot' })}
+                        onClick={() => {
+                          const currentLevel = userProfile?.currentLevel || 1;
+                          const nextTargetNum = Math.min(100, 40 + (currentLevel * 10));
+                          startBotGame(nextTargetNum);
+                        }}
                         className="group flex items-center p-3 md:p-4 bg-[#291c14] hover:bg-[#3d291c] border border-[#784627] hover:border-[#84cc16] rounded transition-all shadow-md relative overflow-hidden w-full text-left">
                         <div className="absolute top-0 right-0 p-1 bg-[#84cc16] text-[#291c14] text-[7px] md:text-[8px] font-bold uppercase tracking-tighter rounded-bl px-1.5 md:px-2">Huyện Lệnh</div>
                         <Bot className="w-6 h-6 md:w-8 md:h-8 text-[#84cc16] mr-3 md:mr-4" />
@@ -2093,17 +2057,17 @@ export default function App() {
                 Bảng Vàng Danh Dự
               </h2>
               
-              <div className="flex w-full mb-4 md:mb-6 border-b border-[#784627] overflow-x-auto no-scrollbar">
+              <div className="flex w-full mb-4 md:mb-6 border-b border-[#784627]">
                 {[
                   { id: 'balance', label: 'Ngân Lượng' },
-                  { id: 'fastest50', label: 'Tốc Độ 50 Số' },
-                  { id: 'fastest100', label: 'Tốc Độ 100 Số' },
-                  { id: 'botLevel', label: 'Cấp Trưởng Làng' }
+                  { id: 'fastest50', label: '50 Số' },
+                  { id: 'fastest100', label: '100 Số' },
+                  { id: 'bot_rank', label: 'Hạ Trưởng Làng' }
                 ].map((tab) => (
                   <button
                     key={tab.id}
-                    onClick={() => setLeaderboardTab(tab.id as 'balance' | 'fastest50' | 'fastest100' | 'botLevel')}
-                    className={`shrink-0 flex-1 py-3 px-2 text-[10px] md:text-sm font-bold uppercase transition-all whitespace-nowrap ${leaderboardTab === tab.id ? 'text-[#f59e0b] border-b-2 border-[#f59e0b] bg-[#452b1b]/50' : 'text-[#d6b485] hover:text-[#fef3c7] hover:bg-[#452b1b]/20'}`}
+                    onClick={() => setLeaderboardTab(tab.id as 'balance' | 'fastest50' | 'fastest100' | 'bot_rank')}
+                    className={`flex-1 py-3 px-2 text-xs md:text-sm font-bold uppercase transition-all whitespace-nowrap ${leaderboardTab === tab.id ? 'text-[#f59e0b] border-b-2 border-[#f59e0b] bg-[#452b1b]/50' : 'text-[#d6b485] hover:text-[#fef3c7] hover:bg-[#452b1b]/20'}`}
                   >
                     {tab.label}
                   </button>
@@ -2114,11 +2078,11 @@ export default function App() {
                 <div className="flex flex-col gap-4 pb-4">
                   <div className="bg-[#452b1b]/50 p-4 md:p-6 border border-[#784627] rounded shadow-sm">
                     <h3 className="text-[#fef3c7] font-bold mb-4 uppercase text-xs md:text-sm border-b border-[#784627]/50 pb-2">
-                       {leaderboardTab === 'balance' ? 'Hạng bậc trạng nguyên' : leaderboardTab === 'botLevel' ? 'Cao thủ đánh bại Trưởng Làng' : 'Kỷ lục gia tốc độ'}
+                       {leaderboardTab === 'balance' ? 'Hạng bậc trạng nguyên' : leaderboardTab === 'bot_rank' ? 'Huyền thoại lôi đài' : 'Kỷ lục gia tốc độ'}
                     </h3>
                     <div className="flex flex-col gap-3">
                       {leaderboard.length === 0 ? (
-                        !(leaderboardTab === 'fastest50' || leaderboardTab === 'fastest100') ? <Spinner /> : <div className="text-[#d6b485] text-center text-sm md:text-base italic py-8">Chưa có sĩ tử nào ghi danh kỷ lục này.</div>
+                        <div className="text-[#d6b485] text-center text-sm md:text-base italic py-8">Chưa có sĩ tử nào ghi danh kỷ lục này.</div>
                       ) : (
                         leaderboard.map((u, i) => (
                           <div key={u.uid} className={`flex items-center px-3 py-3 md:px-4 md:py-4 rounded border ${i === 0 ? 'bg-[#291c14] border-[#f59e0b] shadow-[0_0_10px_rgba(245,158,11,0.2)]' : 'bg-[#291c14] border-[#784627]'} transition-all`}>
@@ -2130,10 +2094,13 @@ export default function App() {
                             <div className="font-mono text-[#f59e0b] font-bold text-sm md:text-xl flex flex-col items-end md:flex-row md:items-center gap-1 md:gap-2 shrink-0">
                               {leaderboardTab === 'balance' ? (
                                 <div className="flex items-center gap-1"><Coins className="w-3.5 h-3.5 md:w-4 md:h-4 text-yellow-500" /> {u.balance.toLocaleString('vi-VN')}</div>
-                              ) : leaderboardTab === 'botLevel' ? (
-                                <div className="flex items-center gap-1 text-[#f59e0b]">
-                                  <Swords className="w-3.5 h-3.5 md:w-4 md:h-4" />
-                                  <span className="tabular-nums">{(u.botLevel || 1)}</span>
+                              ) : leaderboardTab === 'bot_rank' ? (
+                                <div className="flex flex-col items-end text-[#f59e0b]">
+                                   <div className="flex items-center gap-1">
+                                      <Crown className="w-3.5 h-3.5 md:w-4 md:h-4" /> 
+                                      <span className="tabular-nums">{u.botWins || 0} Trận</span>
+                                   </div>
+                                   <div className="text-[10px] uppercase font-bold">Cấp {u.currentLevel || 1}</div>
                                 </div>
                               ) : (
                                 <div className="flex items-center gap-1 text-green-500">
@@ -2605,11 +2572,6 @@ export default function App() {
                             <p className="font-black text-[#fef3c7] text-2xl sm:text-4xl uppercase bg-[#291c14] border-2 border-[#f59e0b] px-6 py-4 rounded-lg shadow-[0_0_20px_rgba(245,158,11,0.3)]">
                               {userProfile?.username || user?.displayName || 'Trạng Nguyên'}
                             </p>
-                            {gameState.mode === 'bot' && (
-                              <p className="text-[#10b981] font-bold text-sm animate-pulse">
-                                Chúc mừng ngài đánh bại <span className="uppercase">{gameState.player2_name}</span>!<br/>Trưởng Làng sẽ nâng cao năng lực ở Ván sau.
-                              </p>
-                            )}
                           </div>
                         ) : gameState.winner === null && gameState.mode === 'single' ? (
                           <div className="space-y-4">
@@ -2625,25 +2587,17 @@ export default function App() {
                             </p>
                             <div className="h-0.5 w-20 bg-[#784627]"></div>
                             <p className="text-[#d6b485] text-sm uppercase font-bold">
-                              Tiền bối chiến thắng: <span className="text-[#fef3c7]">{gameState.winner === gameState.player1 ? gameState.player1_name : gameState.player2_name}</span>
+                              Tiền bối chiến thắng: <span className="text-[#fef3c7]">{gameState.winner === gameState.player1 ? gameState.player1_name : (gameState.mode === 'bot' ? 'Trưởng Làng' : gameState.player2_name)}</span>
                             </p>
                           </div>
                         )}
                      </div>
 
-                     <div className="flex flex-col items-center gap-4 mt-6 sm:mt-10 w-full px-4">
-                       <button 
-                        onClick={handleShare}
-                        className="w-full max-w-[200px] bg-[#22c55e] hover:bg-[#16a34a] text-[#fef3c7] font-black py-2 px-3 text-sm sm:text-base shadow-[0_4px_0_#14532d] border-2 border-[#4ade80] rounded-lg uppercase transition-all hover:-translate-y-1 active:translate-y-1 active:shadow-none animate-pulse flex items-center justify-center gap-1.5">
-                         <Share2 className="w-4 h-4 sm:w-5 sm:h-5" /> Khoe Thành Tích
-                       </button>
-
-                       <button 
-                        onClick={leaveGame}
-                        className="w-full max-w-[200px] bg-[#b45309] hover:bg-[#d97706] text-[#fef3c7] font-black py-2 px-3 text-sm sm:text-base shadow-[0_4px_0_#78350f] border-2 border-[#f59e0b] rounded-lg uppercase transition-all hover:-translate-y-1 active:translate-y-1 active:shadow-none flex items-center justify-center gap-1.5">
-                        Quay Về Đình Làng
-                       </button>
-                     </div>
+                     <button 
+                      onClick={leaveGame}
+                      className="mt-6 sm:mt-10 bg-[#b45309] hover:bg-[#d97706] text-[#fef3c7] font-black py-4 px-10 text-xl sm:text-2xl shadow-[0_6px_0_#78350f] border-2 border-[#f59e0b] rounded-lg uppercase transition-all hover:-translate-y-1 active:translate-y-1 active:shadow-none animate-pulse">
+                      Xác Nhận & Quay Về
+                     </button>
                   </div>
                 )}
 
@@ -2699,7 +2653,7 @@ export default function App() {
                         {(user?.uid === gameState.player1 || gameState.mode === 'single') && (
                           <button 
                              onClick={togglePause}
-                             className="flex-1 flex flex-col items-center justify-center p-2 bg-[#291c14] border-2 border-slate-500 rounded-lg shadow-lg group active:scale-95 transition-all text-slate-300 hover:bg-[#452b1b]">
+                             className="flex-[1.5] flex flex-col items-center justify-center p-2 bg-[#291c14] border-2 border-slate-500 rounded-lg shadow-lg group active:scale-95 transition-all text-slate-300 hover:bg-[#452b1b]">
                              <div className="flex items-center gap-2">
                                {gameState.is_paused ? <Play className="w-5 h-5" /> : <Pause className="w-5 h-5" />}
                              </div>
@@ -2710,7 +2664,7 @@ export default function App() {
                         {/* Hint Button */}
                         <button 
                            onClick={useHint}
-                           className="flex flex-col items-center justify-center p-2 bg-[#291c14] border-2 border-[#f59e0b] rounded-lg shadow-lg group active:scale-95 transition-all text-[#f59e0b] hover:bg-[#452b1b] flex-1">
+                           className="flex-1 flex flex-col items-center justify-center p-2 bg-[#291c14] border-2 border-[#f59e0b] rounded-lg shadow-lg group active:scale-95 transition-all text-[#f59e0b] hover:bg-[#452b1b]">
                            <div className="flex items-center gap-2">
                              <Gem className="w-5 h-5 animate-pulse" />
                              <span className="font-black text-xl">
@@ -2721,20 +2675,20 @@ export default function App() {
                         </button>
 
                         {/* Mobile: Quick Chat Toggle */}
-                        <div className="flex-1 relative">
+                        <div className="flex-1 md:hidden relative">
                            <button 
                               onClick={() => setShowQuickChat(!showQuickChat)}
-                              className="w-full h-full flex flex-col items-center justify-center p-2 bg-[#291c14] border-2 border-[#3b82f6] rounded-lg shadow-lg active:scale-95 transition-all text-[#3b82f6] hover:bg-[#452b1b]">
+                              className="w-full flex flex-col items-center justify-center p-2 bg-[#291c14] border-2 border-[#3b82f6] rounded-lg shadow-lg active:scale-95 transition-all text-[#3b82f6] hover:bg-[#452b1b]">
                               <MessageCircle className="w-5 h-5" />
                               <span className="text-[8px] font-black uppercase tracking-tighter mt-1">Tán Gẫu</span>
                            </button>
                            {showQuickChat && (
-                            <div className="absolute bottom-full mb-2 left-0 right-0 z-50 bg-[#291c14] border-2 border-[#3b82f6] p-2 rounded-lg grid grid-cols-2 gap-1 shadow-2xl">
-                               {['Đỉnh cao!', 'Gắt quá!', 'Nhường ván nhé!', 'Nhanh nào!', 'Ta thắng!', 'Chưa thua đâu!'].map(msg => (
+                            <div className="absolute bottom-full mb-2 left-0 right-0 z-50 bg-[#291c14] border-2 border-[#3b82f6] p-2 rounded-lg grid grid-cols-3 gap-1 shadow-2xl">
+                               {['🤣', '😭', '😡', 'Lẹ lên!', 'Win!', 'Đợi tí!'].map(msg => (
                                  <button
                                    key={msg}
                                    onClick={() => { sendQuickChat(msg); setShowQuickChat(false); }}
-                                   className="bg-[#452b1b] py-2 text-[10px] rounded active:bg-blue-600 transition-colors text-white font-bold p-1">
+                                   className="bg-[#452b1b] py-2 text-xs rounded active:bg-blue-600 transition-colors">
                                    {msg}
                                  </button>
                                ))}
@@ -2802,6 +2756,8 @@ export default function App() {
           isOpen={showNumberSelectParams !== null}
           onClose={() => setShowNumberSelectParams(null)}
           onConfirm={handleConfirmNumber}
+          action={showNumberSelectParams?.action || null}
+          userProfile={userProfile}
         />
 
         {/* Surrender Confirmation Modal */}
@@ -2905,15 +2861,22 @@ export default function App() {
 function NumberSelectionModal({ 
   isOpen, 
   onClose, 
-  onConfirm 
+  onConfirm,
+  action,
+  userProfile
 }: { 
   isOpen: boolean, 
   onClose: () => void, 
-  onConfirm: (num: number) => void 
+  onConfirm: (num: number) => void,
+  action: 'single' | 'bot' | 'create1v1' | 'invite' | null,
+  userProfile: UserProfile | null
 }) {
   const [customNum, setCustomNum] = useState<string>('');
   
   if (!isOpen) return null;
+
+  const currentLevel = userProfile?.currentLevel || 1;
+  const nextTargetNum = Math.min(100, 40 + (currentLevel * 10));
 
   return (
     <div className="fixed inset-0 bg-black/80 z-[100] flex items-center justify-center p-4">
@@ -2924,37 +2887,52 @@ function NumberSelectionModal({
         <h2 className="text-[#f59e0b] font-display text-xl md:text-2xl font-bold uppercase text-center border-b border-[#784627] pb-3 tracking-wider">Mộc Bản Mục Tiêu</h2>
         <p className="text-[#d6b485] text-xs text-center -mt-2">Chọn số lượng mộc bản để tranh tài</p>
         <div className="flex flex-col gap-3 mt-2">
-          <button onClick={() => onConfirm(50)} className="w-full py-3 bg-[#291c14] hover:bg-[#5c3a21] border border-[#784627] hover:border-[#f59e0b] text-[#fef3c7] font-bold rounded flex items-center justify-center gap-2 transition-all">
-            <span className="text-xl">50</span> Số
-          </button>
-          <button onClick={() => onConfirm(100)} className="w-full py-3 bg-[#291c14] hover:bg-[#5c3a21] border border-[#784627] hover:border-[#f59e0b] text-[#fef3c7] font-bold rounded flex items-center justify-center gap-2 transition-all">
-            <span className="text-xl text-[#f59e0b]">100</span> Số (Chẩn)
-          </button>
-          <div className="relative mt-2 border-t border-[#784627] pt-4">
-            <div className="flex items-center gap-2">
-              <input 
-                type="number" 
-                placeholder="Nhập số tùy chọn..." 
-                value={customNum}
-                onChange={(e) => setCustomNum(e.target.value)}
-                min="10"
-                max="999"
-                className="flex-1 bg-[#291c14] border border-[#784627] text-[#fef3c7] px-3 py-2.5 rounded focus:outline-none focus:border-[#f59e0b] text-center font-bold font-mono"
-              />
-              <button 
-                onClick={() => {
-                  const num = parseInt(customNum);
-                  if (num >= 5 && num <= 500) {
-                    onConfirm(num);
-                  } else {
-                    alert('Xin ngài nhập số hợp lệ (Từ 5 đến 500)!');
-                  }
-                }}
-                className="px-5 py-2.5 bg-[#b45309] hover:bg-[#d97706] text-[#fef3c7] font-bold rounded border border-[#92400e] transition-colors">
-                Giao Ước
+          {action === 'bot' ? (
+            currentLevel >= 6 ? (
+                <div className="text-center py-4 text-[#f59e0b] font-bold">Bạn đã là người đạt cấp độ tối đa</div>
+            ) : (
+                <button 
+                    onClick={() => onConfirm(nextTargetNum)} 
+                    className="w-full py-4 bg-[#291c14] hover:bg-[#5c3a21] border border-[#784627] hover:border-[#f59e0b] text-[#fef3c7] font-bold rounded flex items-center justify-center gap-2 transition-all"
+                >
+                    <span className="text-xl">{nextTargetNum}</span> Số (Cấp {currentLevel})
+                </button>
+            )
+          ) : (
+            <>
+              <button onClick={() => onConfirm(50)} className="w-full py-3 bg-[#291c14] hover:bg-[#5c3a21] border border-[#784627] hover:border-[#f59e0b] text-[#fef3c7] font-bold rounded flex items-center justify-center gap-2 transition-all">
+                <span className="text-xl">50</span> Số
               </button>
-            </div>
-          </div>
+              <button onClick={() => onConfirm(100)} className="w-full py-3 bg-[#291c14] hover:bg-[#5c3a21] border border-[#784627] hover:border-[#f59e0b] text-[#fef3c7] font-bold rounded flex items-center justify-center gap-2 transition-all">
+                <span className="text-xl text-[#f59e0b]">100</span> Số (Chẩn)
+              </button>
+              <div className="relative mt-2 border-t border-[#784627] pt-4">
+                <div className="flex items-center gap-2">
+                  <input 
+                    type="number" 
+                    placeholder="Nhập số tùy chọn..." 
+                    value={customNum}
+                    onChange={(e) => setCustomNum(e.target.value)}
+                    min="10"
+                    max="999"
+                    className="flex-1 bg-[#291c14] border border-[#784627] text-[#fef3c7] px-3 py-2.5 rounded focus:outline-none focus:border-[#f59e0b] text-center font-bold font-mono"
+                  />
+                  <button 
+                    onClick={() => {
+                      const num = parseInt(customNum);
+                      if (num >= 5 && num <= 500) {
+                        onConfirm(num);
+                      } else {
+                        alert('Xin ngài nhập số hợp lệ (Từ 5 đến 500)!');
+                      }
+                    }}
+                    className="px-5 py-2.5 bg-[#b45309] hover:bg-[#d97706] text-[#fef3c7] font-bold rounded border border-[#92400e] transition-colors">
+                    Giao Ước
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>
